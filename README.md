@@ -234,7 +234,7 @@ side — a resumed session keeps its original ID, so the grouping survives
 ## Provider and transport configuration
 
 Defaults target `https://api.subconscious.dev/v1` with model
-`subconscious/glm-5.2`. Override these per invocation with `--base-url` and
+`subconscious/glm-5.3-marathon`. Override these per invocation with `--base-url` and
 `--model`, per shell with `SC_BASE_URL` and `SC_MODEL`, or persistently in
 `~/.sc/settings.json`. See [Configuration](docs/CONFIGURATION.md) for precedence
 and complete examples.
@@ -366,8 +366,8 @@ back, `Esc` to close:
     (`[2/3]`). Persisted as a `models` array beside `model`:
 
     ```json
-    { "model": "subconscious/glm-5.2",
-      "models": ["subconscious/glm-5.2"] }
+    { "model": "subconscious/glm-5.3-marathon",
+      "models": ["subconscious/glm-5.3-marathon"] }
     ```
 
     The roster always contains the model in use, so an existing install with
@@ -438,7 +438,7 @@ perfectly serviceable — set the caps you want in `~/.sc/settings.json`:
 ```json
 {
   "provider": { "base_url": "https://your-endpoint/v1", "api_key_env": "SC_API_KEY" },
-  "model": "subconscious/glm-5.2",
+  "model": "subconscious/glm-5.3-marathon",
   "context": { "tool_result_cap": 16384, "read_default_limit": 2000 }
 }
 ```
@@ -750,7 +750,7 @@ valid prefix. Line 1 is a `SessionHeader`; every line after it is one `Turn`,
 tagged by a `type` field:
 
 ```jsonl
-{"id":"<uuid>","cwd":"/repo","model":"subconscious/glm-5.2","mode":"default","extra_dirs":[]}
+{"id":"<uuid>","cwd":"/repo","model":"subconscious/glm-5.3-marathon","mode":"default","extra_dirs":[]}
 {"type":"user","content":"explain src/","ts":1755300000000}
 {"type":"assistant","text":"Let me look.","calls":[{...}],"usage":{...}}
 {"type":"tool_result","call_id":"call_1","tool":"Bash",
