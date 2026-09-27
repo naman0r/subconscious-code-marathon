@@ -2642,6 +2642,13 @@ fn menu_row_line(menu: &MenuState, row: &Row, selected: bool, now: Instant) -> L
                         note.push_str(&format!("  [{}/{n}]", at + 1));
                     }
                 }
+                // Why a saved model fails: the endpoint no longer offers it.
+                if f.kind == rc_config::edit::FieldKind::Model
+                    && !menu.served.is_empty()
+                    && !menu.served.contains(&value)
+                {
+                    note.push_str("  (not served)");
+                }
                 if f.env_override().is_some() {
                     note.push_str(&format!("  (${} overrides)", f.env));
                 }
@@ -2754,6 +2761,7 @@ mod tests {
             settings: rc_config::Settings::load(std::path::Path::new("/nonexistent")),
             editing: None,
             editing_api_key: false,
+            served: Vec::new(),
             status: None,
             pending_outcome: None,
         }
@@ -3055,6 +3063,24 @@ mod tests {
             !screen.contains("[1/1]"),
             "no position for a lone model: {screen}"
         );
+    }
+
+    /// A saved model the endpoint no longer lists is flagged, which is the
+    /// difference between "the picker is broken" and "pick another one".
+    #[test]
+    fn settings_model_row_flags_a_model_the_endpoint_does_not_serve() {
+        let mut m = menu_with_models(&["old/retired", "new/served"]);
+        m.served = vec!["new/served".into()];
+        let mut state = ViewState::new("m".into());
+        state.menu_overlay = Some(m);
+        let screen = rendered_sized(&mut state, 78, 18);
+        assert!(screen.contains("(not served)"), "flagged: {screen}");
+
+        let mut m = menu_with_models(&["new/served", "old/retired"]);
+        m.served = vec!["new/served".into()];
+        state.menu_overlay = Some(m);
+        let screen = rendered_sized(&mut state, 78, 18);
+        assert!(!screen.contains("(not served)"), "not flagged: {screen}");
     }
 
     /// While adding a model the editor replaces the key hints, so the only

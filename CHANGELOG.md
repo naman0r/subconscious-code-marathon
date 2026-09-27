@@ -5,6 +5,19 @@ All notable changes to Subconscious Code are documented here. This project uses
 
 ## [Unreleased]
 
+### Fixed
+
+- The default model is now `subconscious/glm-5.3-marathon`. The previous
+  default, `subconscious/glm-5.2`, is no longer served and every request
+  failed with `model_not_allowed`.
+- The `/menu` model picker offers the models the endpoint lists at
+  `GET /models`, marks saved models it no longer serves, and switches the
+  running conversation instead of only the next launch.
+- Reloading from `/menu` before the first turn no longer fails to reopen a
+  session file that has not been written yet.
+- `marathon doctor` checks that the configured model is served and lists the
+  alternatives when it is not.
+
 ## [0.1.6] - 2026-09-09
 
 ### Changed

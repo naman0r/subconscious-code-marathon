@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
 
 use rc_config::edit::{FieldKind, FieldSpec, EDITABLE};
@@ -42,6 +43,35 @@ pub enum Outcome {
     /// file); the point is a fresh HTTP client, which is required when a
     /// newly-saved API key or request transport setting changes.
     Reload,
+    /// [`Self::Reload`], with the session switched to the model now
+    /// configured: a model picked in `/menu` is meant for this conversation,
+    /// not just the next one.
+    SwitchModel,
+}
+
+/// Model ids the endpoint advertises, published by the host once `GET /models`
+/// answers. A process global rather than a `run` argument because the fetch
+/// finishes whenever it finishes (usually after the TUI is up), and the menu
+/// only needs the latest answer at the moment it opens.
+static SERVED_MODELS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Offer `models` in the `/menu` model picker from the next time it opens.
+pub fn set_served_models(models: Vec<String>) {
+    *SERVED_MODELS.lock().unwrap_or_else(PoisonError::into_inner) = models;
+}
+
+/// Settings as the page shows them: the saved roster, then every model the
+/// endpoint serves that isn't saved yet, so ←/→ reaches a working model on an
+/// install whose saved one was retired. Only a model actually picked is
+/// written to `models` (see [`MenuState::commit`]).
+fn load_settings(project_dir: &Path, served: &[String]) -> Settings {
+    let mut settings = Settings::load(project_dir);
+    for model in served {
+        if !settings.models.contains(model) {
+            settings.models.push(model.clone());
+        }
+    }
+    settings
 }
 
 /// Which page is showing.
@@ -111,6 +141,10 @@ pub(crate) struct MenuState {
     /// True when `editing` holds a new API key: the buffer renders masked, and
     /// [`Self::commit`] routes to `~/.sc/key` instead of `settings.json`.
     pub editing_api_key: bool,
+    /// Snapshot of [`SERVED_MODELS`] taken when the menu opened. Empty when
+    /// the endpoint couldn't be asked, in which case nothing is marked as
+    /// unserved.
+    pub served: Vec<String>,
     /// A transient line under the page: a save confirmation or an error.
     pub status: Option<String>,
     /// Set when a commit needs the host to act — currently only a saved API
@@ -123,13 +157,18 @@ impl MenuState {
     /// Open the menu, reading the session listing from `sessions_dir` and
     /// resolving settings against `project_dir`.
     pub fn new(sessions_dir: &Path, project_dir: &Path) -> Self {
+        let served = SERVED_MODELS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         Self {
             page: MenuPage::Root,
             selected: 0,
             projects: group_projects(rc_session::list(sessions_dir)),
-            settings: Settings::load(project_dir),
+            settings: load_settings(project_dir, &served),
             editing: None,
             editing_api_key: false,
+            served,
             status: None,
             pending_outcome: None,
         }
@@ -213,7 +252,7 @@ impl MenuState {
     /// Re-read the session listing and settings from disk.
     pub fn refresh(&mut self, sessions_dir: &Path, project_dir: &Path) {
         self.projects = group_projects(rc_session::list(sessions_dir));
-        self.settings = Settings::load(project_dir);
+        self.settings = load_settings(project_dir, &self.served);
         let n = self.rows().len();
         self.selected = self.selected.min(n.saturating_sub(1));
         self.status = Some("refreshed".into());
@@ -302,9 +341,11 @@ impl MenuState {
         // Typing a model both selects it and remembers it, so the roster grows
         // as you use it instead of needing separate "add" and "switch" steps.
         let written = match field.kind {
+            // The on-disk roster, not the page's: picking one served model
+            // must not save every other model the endpoint happens to list.
             FieldKind::Model => field
                 .parse(value)
-                .and_then(|_| rc_config::edit::add_model(value, &self.settings)),
+                .and_then(|_| rc_config::edit::add_model(value, &Settings::load(project_dir))),
             _ => field
                 .parse(value)
                 .and_then(|v| rc_config::edit::set_user_setting(field, v)),
@@ -312,23 +353,27 @@ impl MenuState {
         match written {
             Ok(path) => {
                 self.editing = None;
-                self.settings = Settings::load(project_dir);
+                self.settings = load_settings(project_dir, &self.served);
                 // A saved value that an env var outranks would look like a
                 // no-op; say so rather than let the user think it took effect.
-                let reload_client = field.name == "dlr_enabled";
+                let reload = match field.name {
+                    "dlr_enabled" => Some(Outcome::Reload),
+                    "model" => Some(Outcome::SwitchModel),
+                    _ => None,
+                };
                 self.status = Some(match field.env_override() {
                     Some(_) => format!(
                         "saved to {} — but ${} overrides it in this shell",
                         path.display(),
                         field.env
                     ),
-                    None if reload_client => {
+                    None if reload.is_some() => {
                         format!("saved to {} — reloading marathon", path.display())
                     }
                     None => format!("saved to {}", path.display()),
                 });
-                if reload_client {
-                    self.pending_outcome = Some(Outcome::Reload);
+                if reload.is_some() {
+                    self.pending_outcome = reload;
                 }
             }
             Err(e) => self.status = Some(e),
@@ -365,7 +410,7 @@ impl MenuState {
             Ok(path) => {
                 self.editing = None;
                 self.editing_api_key = false;
-                self.settings = Settings::load(project_dir);
+                self.settings = load_settings(project_dir, &self.served);
                 // The env var is still what a *fresh* `marathon` resolves first, so
                 // a saved key that differs from it reverts on the next launch.
                 // Reloading now is honest about both halves.
@@ -408,9 +453,9 @@ impl MenuState {
             return;
         }
         let current = field.current(&self.settings);
-        match rc_config::edit::remove_model(&current, &self.settings) {
+        match rc_config::edit::remove_model(&current, &Settings::load(project_dir)) {
             Ok(_) => {
-                self.settings = Settings::load(project_dir);
+                self.settings = load_settings(project_dir, &self.served);
                 self.status = Some(format!("removed {current} from the saved list"));
             }
             Err(e) => self.status = Some(e),
@@ -631,6 +676,18 @@ mod tests {
         );
     }
 
+    /// Served models extend the saved roster after it, without duplicating
+    /// one that is already saved.
+    #[test]
+    fn served_models_follow_the_saved_roster() {
+        let saved = Settings::load(Path::new("/nonexistent-project-dir")).models;
+        let served = vec!["z/served".to_string(), saved[0].clone()];
+
+        let merged = load_settings(Path::new("/nonexistent-project-dir"), &served).models;
+        assert_eq!(merged[..saved.len()], saved[..]);
+        assert_eq!(merged[saved.len()..], ["z/served".to_string()]);
+    }
+
     /// `d` only means "remove a model" on the model row; on any other field it
     /// must not touch settings.
     #[test]
@@ -751,6 +808,7 @@ mod tests {
             settings: Settings::load(Path::new("/nonexistent-project-dir")),
             editing: None,
             editing_api_key: false,
+            served: Vec::new(),
             status: None,
             pending_outcome: None,
         }

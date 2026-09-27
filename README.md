@@ -371,7 +371,11 @@ back, `Esc` to close:
     ```
 
     The roster always contains the model in use, so an existing install with
-    no `models` key still starts with a working list of one.
+    no `models` key still starts with a working list of one. Models the
+    endpoint lists at `GET /models` follow the saved ones, so `←/→` reaches
+    them without typing a name; only a model you pick is saved. A saved model
+    the endpoint no longer lists is marked `(not served)`. Picking a model
+    switches the running conversation to it.
   - **Base URL** — the `base_url` row is free text; `↵`, edit, `↵` to save.
 
 ## Permissions

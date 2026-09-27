@@ -441,3 +441,40 @@ async fn respects_retry_after_header_on_429() {
         2
     );
 }
+
+#[tokio::test]
+async fn lists_the_endpoints_models_in_order() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(header("authorization", "Bearer test-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "object": "list",
+            "data": [
+                { "id": "b/two", "object": "model", "owned_by": "x" },
+                { "id": "a/one", "object": "model", "owned_by": "x" }
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let client = ChatClient::new(server.uri(), "test-key".into(), "mock".into(), None).unwrap();
+
+    assert_eq!(client.list_models().await.unwrap(), ["b/two", "a/one"]);
+}
+
+#[tokio::test]
+async fn listing_models_surfaces_http_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("no such route"))
+        .mount(&server)
+        .await;
+    let client = ChatClient::new(server.uri(), "test-key".into(), "mock".into(), None).unwrap();
+
+    let err = client.list_models().await.unwrap_err();
+    assert!(
+        matches!(err, rc_proto::ProtoError::Status { status: 404, .. }),
+        "{err}"
+    );
+}
