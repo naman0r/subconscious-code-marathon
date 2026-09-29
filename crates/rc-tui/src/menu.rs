@@ -82,6 +82,8 @@ pub(crate) enum MenuPage {
     /// Sessions belonging to one project directory.
     Sessions(PathBuf),
     Settings,
+    /// Every known model — saved and served — to switch the session to.
+    Models,
 }
 
 /// A project: one working directory, with the sessions recorded against it.
@@ -115,6 +117,8 @@ pub(crate) enum Row {
     NewSession(PathBuf),
     /// A settings field, by index into [`EDITABLE`].
     Field(usize),
+    /// Switch the running session to this model.
+    Model(String),
     /// Open the masked API-key editor. Writes `~/.sc/key` (mode 0600) on save —
     /// not a `settings.json` field, so it has its own commit path rather than a
     /// [`FieldSpec`](rc_config::edit::FieldSpec).
@@ -145,11 +149,15 @@ pub(crate) struct MenuState {
     /// the endpoint couldn't be asked, in which case nothing is marked as
     /// unserved.
     pub served: Vec<String>,
+    /// The model the running session uses, which a resumed session can hold
+    /// apart from the configured `settings.model`. Set by `app` when it opens
+    /// the menu; empty in tests that don't care.
+    pub running_model: String,
     /// A transient line under the page: a save confirmation or an error.
     pub status: Option<String>,
-    /// Set when a commit needs the host to act — currently only a saved API
-    /// key, which requires a rebuilt client. `app` takes this after each
-    /// commit and leaves the TUI with it.
+    /// Set when a commit needs the host to act: a saved API key, DLR toggle,
+    /// or model, each of which requires a rebuilt client. `app` takes this
+    /// after each commit and leaves the TUI with it.
     pub pending_outcome: Option<Outcome>,
 }
 
@@ -169,6 +177,7 @@ impl MenuState {
             editing: None,
             editing_api_key: false,
             served,
+            running_model: String::new(),
             status: None,
             pending_outcome: None,
         }
@@ -179,6 +188,7 @@ impl MenuState {
         match &self.page {
             MenuPage::Root => vec![
                 Row::Goto(MenuPage::Projects),
+                Row::Goto(MenuPage::Models),
                 Row::Goto(MenuPage::Settings),
                 Row::ChangeApiKey,
                 Row::Close,
@@ -202,6 +212,13 @@ impl MenuState {
                 rows
             }
             MenuPage::Settings => (0..EDITABLE.len()).map(Row::Field).collect(),
+            MenuPage::Models => self
+                .settings
+                .models
+                .iter()
+                .cloned()
+                .map(Row::Model)
+                .collect(),
         }
     }
 
@@ -238,7 +255,7 @@ impl MenuState {
     pub fn back(&mut self) -> bool {
         match &self.page {
             MenuPage::Root => false,
-            MenuPage::Projects | MenuPage::Settings => {
+            MenuPage::Projects | MenuPage::Settings | MenuPage::Models => {
                 self.goto(MenuPage::Root);
                 true
             }
@@ -358,7 +375,8 @@ impl MenuState {
                 // no-op; say so rather than let the user think it took effect.
                 let reload = match field.name {
                     "dlr_enabled" => Some(Outcome::Reload),
-                    "model" => Some(Outcome::SwitchModel),
+                    // Rebuilding would just pick the env var's model back up.
+                    "model" if field.env_override().is_none() => Some(Outcome::SwitchModel),
                     _ => None,
                 };
                 self.status = Some(match field.env_override() {
@@ -459,6 +477,73 @@ impl MenuState {
                 self.status = Some(format!("removed {current} from the saved list"));
             }
             Err(e) => self.status = Some(e),
+        }
+    }
+
+    /// Open the models page with the cursor on the running model.
+    pub fn goto_models(&mut self) {
+        self.goto(MenuPage::Models);
+        self.selected = self
+            .settings
+            .models
+            .iter()
+            .position(|m| *m == self.running_model)
+            .unwrap_or(0);
+    }
+
+    /// Switch the running session to `name`: save it as the configured model
+    /// (and to the roster), then ask the host to rebuild the session on it.
+    pub fn pick_model(&mut self, name: &str, project_dir: &Path) {
+        if name == self.running_model && name == self.settings.model {
+            self.status = Some(format!("already using {name}"));
+            return;
+        }
+        // The on-disk roster, as in `commit`: one pick saves one model.
+        if let Err(e) = rc_config::edit::add_model(name, &Settings::load(project_dir)) {
+            self.status = Some(e);
+            return;
+        }
+        self.settings = load_settings(project_dir, &self.served);
+        // Rebuilding would just pick the env var's model back up.
+        if let Some(field) = EDITABLE.iter().find(|f| f.kind == FieldKind::Model) {
+            if field.env_override().is_some() {
+                self.status = Some(format!(
+                    "saved {name} — but ${} overrides it in this shell",
+                    field.env
+                ));
+                return;
+            }
+        }
+        self.pending_outcome = Some(Outcome::SwitchModel);
+    }
+
+    /// The model `query` names: an exact id, or a fragment matching exactly
+    /// one known model (`/model deepseek`). While the endpoint's list is
+    /// known, a name matching nothing is refused rather than saved to fail
+    /// with a 403 on the next turn; without a list, any id is taken as typed.
+    pub fn resolve_model(&self, query: &str) -> Result<String, String> {
+        let query = query.trim();
+        let known = &self.settings.models;
+        if known.iter().any(|m| m == query) {
+            return Ok(query.to_string());
+        }
+        let needle = query.to_lowercase();
+        let matches: Vec<&String> = known
+            .iter()
+            .filter(|m| m.to_lowercase().contains(&needle))
+            .collect();
+        match matches.as_slice() {
+            [one] => Ok((*one).clone()),
+            [] if self.served.is_empty() => Ok(query.to_string()),
+            [] => Err(format!("no model matches \"{query}\" — /model lists them")),
+            many => Err(format!(
+                "\"{query}\" matches {}: {}",
+                many.len(),
+                many.iter()
+                    .map(|m| m.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
         }
     }
 }
@@ -688,6 +773,78 @@ mod tests {
         assert_eq!(merged[saved.len()..], ["z/served".to_string()]);
     }
 
+    fn models_menu(saved: &[&str], served: &[&str], running: &str) -> MenuState {
+        let mut m = state_with(vec![]);
+        m.settings.model = saved[0].to_string();
+        m.settings.models = saved.iter().map(|s| s.to_string()).collect();
+        m.served = served.iter().map(|s| s.to_string()).collect();
+        m.running_model = running.to_string();
+        m
+    }
+
+    /// `/model` lists every known model and opens on the one in use, so ↵
+    /// on arrival is a no-op rather than a surprise switch.
+    #[test]
+    fn models_page_lists_the_roster_and_starts_on_the_running_model() {
+        let mut m = models_menu(&["a/one", "b/two", "c/three"], &[], "b/two");
+        m.goto_models();
+        assert_eq!(
+            m.rows(),
+            ["a/one", "b/two", "c/three"].map(|n| Row::Model(n.into()))
+        );
+        assert_eq!(m.current_row(), Some(Row::Model("b/two".into())));
+        assert!(m.back());
+        assert_eq!(m.page, MenuPage::Root);
+    }
+
+    /// Picking the model already running changes nothing and says so.
+    #[test]
+    fn picking_the_running_model_is_a_noop() {
+        let mut m = models_menu(&["a/one", "b/two"], &[], "a/one");
+        m.pick_model("a/one", Path::new("/nonexistent-project-dir"));
+        assert!(m.pending_outcome.is_none());
+        assert_eq!(m.status.as_deref(), Some("already using a/one"));
+    }
+
+    /// `/model <name>` takes an exact id or a fragment naming exactly one
+    /// model, and refuses what the endpoint is known not to serve.
+    #[test]
+    fn resolve_model_matches_ids_and_unique_fragments() {
+        let m = models_menu(
+            &[
+                "subconscious/glm-5.3-marathon",
+                "subconscious/deepseek-v4.1-flash-marathon",
+            ],
+            &[
+                "subconscious/glm-5.3-marathon",
+                "subconscious/deepseek-v4.1-flash-marathon",
+            ],
+            "subconscious/glm-5.3-marathon",
+        );
+        assert_eq!(
+            m.resolve_model("DeepSeek").unwrap(),
+            "subconscious/deepseek-v4.1-flash-marathon"
+        );
+        assert_eq!(
+            m.resolve_model(" subconscious/glm-5.3-marathon ").unwrap(),
+            "subconscious/glm-5.3-marathon"
+        );
+        let ambiguous = m.resolve_model("marathon").unwrap_err();
+        assert!(ambiguous.contains("matches 2"), "{ambiguous}");
+        assert!(m
+            .resolve_model("gpt-4")
+            .unwrap_err()
+            .contains("no model matches"));
+    }
+
+    /// Without the endpoint's list there is nothing to check against, so a
+    /// custom provider's id is taken as typed.
+    #[test]
+    fn resolve_model_takes_any_id_when_the_endpoint_list_is_unknown() {
+        let m = models_menu(&["a/one"], &[], "a/one");
+        assert_eq!(m.resolve_model("vendor/custom").unwrap(), "vendor/custom");
+    }
+
     /// `d` only means "remove a model" on the model row; on any other field it
     /// must not touch settings.
     #[test]
@@ -809,6 +966,7 @@ mod tests {
             editing: None,
             editing_api_key: false,
             served: Vec::new(),
+            running_model: String::new(),
             status: None,
             pending_outcome: None,
         }

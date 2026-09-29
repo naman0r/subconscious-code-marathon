@@ -13,6 +13,12 @@ All notable changes to Subconscious Code are documented here. This project uses
 - The `/menu` model picker offers the models the endpoint lists at
   `GET /models`, marks saved models it no longer serves, and switches the
   running conversation instead of only the next launch.
+- `/model` opens a model picker listing saved and served models, and
+  `/model <name>` switches directly. It previously only printed the active
+  model. A picked model also takes precedence over `--model` for the rest of
+  the run.
+- A `model_not_allowed` error now says the API key can't use that model and
+  points at `/model`.
 - Reloading from `/menu` before the first turn no longer fails to reopen a
   session file that has not been written yet.
 - `marathon doctor` checks that the configured model is served and lists the

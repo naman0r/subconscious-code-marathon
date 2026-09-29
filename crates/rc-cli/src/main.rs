@@ -184,7 +184,7 @@ async fn run(cli: Cli) -> Result<()> {
 
     let benchmark_mode = cli.benchmark_report.is_some() || cli.benchmark_trajectory.is_some();
     let mut settings = Settings::load(&std::env::current_dir()?);
-    let model_override = cli.model.clone();
+    let mut model_override = cli.model.clone();
     let base_url_override = cli.base_url.clone();
     if let Some(m) = model_override.clone() {
         settings.model = m;
@@ -441,6 +441,11 @@ async fn run(cli: Cli) -> Result<()> {
         // A reload re-enters the *same* session, so it restores that session's
         // own mode exactly as a resume does.
         let switch_model = matches!(&next, rc_tui::Outcome::SwitchModel);
+        // A model picked in `/menu` is newer intent than `--model`; keeping
+        // the flag would silently put the old model back on the reload.
+        if switch_model {
+            model_override = None;
+        }
         let reload_settings = switch_model || matches!(&next, rc_tui::Outcome::Reload);
         let switched_to_existing = reload_settings || matches!(&next, rc_tui::Outcome::Resume(_));
         let (next_session, next_path) = match next {

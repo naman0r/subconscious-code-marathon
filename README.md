@@ -118,6 +118,7 @@ to edit settings or resume a session, `Shift+Tab` to change permission mode,
 `Tab` to queue a draft while a turn runs, `Esc` to stop, and `Ctrl+C` to quit.
 If a message is queued, `Esc` waits for the current tool call to finish and
 then sends it; press `Esc` again to stop immediately.
+Use `/model` to pick another model for the conversation.
 
 For a non-interactive read-only task:
 
@@ -354,6 +355,12 @@ back, `Esc` to close:
   its sessions, labeled by their first prompt, and resume any of them or start
   a fresh session in that directory. Switching sessions rebuilds the agent
   in-process; no restart.
+- **Models** — every saved model plus every model the endpoint lists at
+  `GET /models`, with `●` on the one in use and `(not served)` on a saved
+  model the endpoint dropped. `↵` switches the running conversation to the
+  selected model and saves it as the default. `/model` opens this page
+  directly; `/model <name>` switches without it, taking an exact id or any
+  fragment that names one model (`/model deepseek`).
 - **Settings** — the resolved value of every setting that
   `~/.sc/settings.json` actually backs, editable in place (`↵` to type, `←/→`
   to cycle a choice) and saved straight to that file. Unknown keys in the file

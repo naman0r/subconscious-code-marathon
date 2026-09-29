@@ -233,10 +233,12 @@ fn config_lines(s: &Settings) -> Vec<String> {
 }
 
 /// Whether the endpoint lists `model`. A retired model otherwise surfaces only
-/// as a 403 on the first chat request, which reads like a key problem.
+/// as a 403 on the first chat request, which reads like a key problem. Being
+/// listed is not proof the key may use it (the gateway lists models it then
+/// refuses), so the chat probes after this one remain the real check.
 fn served_status(model: &str, served: &[String]) -> Status {
     if served.iter().any(|m| m == model) {
-        Status::Pass(format!("{model} is served"))
+        Status::Pass(format!("{model} is listed by the endpoint"))
     } else if served.is_empty() {
         Status::Warn("endpoint lists no models".into())
     } else {
