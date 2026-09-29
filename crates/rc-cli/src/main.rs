@@ -440,13 +440,16 @@ async fn run(cli: Cli) -> Result<()> {
         let Some(next) = next else { return Ok(()) };
         // A reload re-enters the *same* session, so it restores that session's
         // own mode exactly as a resume does.
-        let switch_model = matches!(&next, rc_tui::Outcome::SwitchModel);
-        // A model picked in `/menu` is newer intent than `--model`; keeping
-        // the flag would silently put the old model back on the reload.
-        if switch_model {
-            model_override = None;
+        // A model picked in `/menu` is newer intent than `--model` or
+        // `SC_MODEL`, so it becomes this run's override. `subc marathon` always
+        // sets `SC_MODEL`, which would otherwise undo every pick on reload.
+        if let rc_tui::Outcome::SwitchModel(model) = &next {
+            model_override = Some(model.clone());
         }
-        let reload_settings = switch_model || matches!(&next, rc_tui::Outcome::Reload);
+        let reload_settings = matches!(
+            &next,
+            rc_tui::Outcome::Reload | rc_tui::Outcome::SwitchModel(_)
+        );
         let switched_to_existing = reload_settings || matches!(&next, rc_tui::Outcome::Resume(_));
         let (next_session, next_path) = match next {
             rc_tui::Outcome::Resume(path) => {
@@ -463,7 +466,7 @@ async fn run(cli: Cli) -> Result<()> {
             // even where the env var would outrank it at startup — and the same
             // session reopens from its own file, which already holds every turn
             // (the store appends as they happen).
-            rc_tui::Outcome::Reload | rc_tui::Outcome::SwitchModel => {
+            rc_tui::Outcome::Reload | rc_tui::Outcome::SwitchModel(_) => {
                 if let Some(saved) = rc_config::saved_api_key() {
                     api_key = saved;
                 }
@@ -498,7 +501,7 @@ async fn run(cli: Cli) -> Result<()> {
                 settings.apply_base_url_override(url);
             }
         }
-        if switch_model || model_override.is_some() {
+        if model_override.is_some() {
             session.model = settings.model.clone();
         }
         prepare_session(&mut session, &sessions_dir, &extra_dirs);

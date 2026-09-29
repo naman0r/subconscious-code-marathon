@@ -355,10 +355,12 @@ back, `Esc` to close:
   its sessions, labeled by their first prompt, and resume any of them or start
   a fresh session in that directory. Switching sessions rebuilds the agent
   in-process; no restart.
-- **Models** — every saved model plus every model the endpoint lists at
-  `GET /models`, with `●` on the one in use and `(not served)` on a saved
-  model the endpoint dropped. `↵` switches the running conversation to the
-  selected model and saves it as the default. `/model` opens this page
+- **Models** — every saved model plus every model the API key may use
+  (`GET /v1/models/available`, or `GET /v1/models` on providers without it),
+  with `●` on the one in use and `(not served)` on a saved model the endpoint
+  dropped. `↵` switches the running conversation to the selected model for
+  the rest of the run, even over `--model` or `SC_MODEL`, and saves it as the
+  default. `/model` opens this page
   directly; `/model <name>` switches without it, taking an exact id or any
   fragment that names one model (`/model deepseek`).
 - **Settings** — the resolved value of every setting that
@@ -379,7 +381,7 @@ back, `Esc` to close:
 
     The roster always contains the model in use, so an existing install with
     no `models` key still starts with a working list of one. Models the
-    endpoint lists at `GET /models` follow the saved ones, so `←/→` reaches
+    API key may use follow the saved ones, so `←/→` reaches
     them without typing a name; only a model you pick is saved. A saved model
     the endpoint no longer lists is marked `(not served)`. Picking a model
     switches the running conversation to it.

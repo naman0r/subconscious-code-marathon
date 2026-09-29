@@ -43,14 +43,14 @@ pub enum Outcome {
     /// file); the point is a fresh HTTP client, which is required when a
     /// newly-saved API key or request transport setting changes.
     Reload,
-    /// [`Self::Reload`], with the session switched to the model now
-    /// configured: a model picked in `/menu` is meant for this conversation,
-    /// not just the next one.
-    SwitchModel,
+    /// [`Self::Reload`], with the session switched to this model for the rest
+    /// of the run: a model picked in `/menu` is meant for this conversation,
+    /// not just the next one, and outranks `--model` and `SC_MODEL`.
+    SwitchModel(String),
 }
 
-/// Model ids the endpoint advertises, published by the host once `GET /models`
-/// answers. A process global rather than a `run` argument because the fetch
+/// Model ids the API key may use, published by the host once
+/// [`rc_proto::ChatClient::list_models`] answers. A process global rather than a `run` argument because the fetch
 /// finishes whenever it finishes (usually after the TUI is up), and the menu
 /// only needs the latest answer at the moment it opens.
 static SERVED_MODELS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -375,8 +375,7 @@ impl MenuState {
                 // no-op; say so rather than let the user think it took effect.
                 let reload = match field.name {
                     "dlr_enabled" => Some(Outcome::Reload),
-                    // Rebuilding would just pick the env var's model back up.
-                    "model" if field.env_override().is_none() => Some(Outcome::SwitchModel),
+                    "model" => Some(Outcome::SwitchModel(value.trim().to_string())),
                     _ => None,
                 };
                 self.status = Some(match field.env_override() {
@@ -494,27 +493,18 @@ impl MenuState {
     /// Switch the running session to `name`: save it as the configured model
     /// (and to the roster), then ask the host to rebuild the session on it.
     pub fn pick_model(&mut self, name: &str, project_dir: &Path) {
-        if name == self.running_model && name == self.settings.model {
+        if name == self.running_model {
             self.status = Some(format!("already using {name}"));
             return;
         }
-        // The on-disk roster, as in `commit`: one pick saves one model.
+        // The on-disk roster, as in `commit`: one pick saves one model. Under
+        // `SC_MODEL` the saved default is shadowed at the next launch, but
+        // the pick still applies to this run (see [`Outcome::SwitchModel`]).
         if let Err(e) = rc_config::edit::add_model(name, &Settings::load(project_dir)) {
             self.status = Some(e);
             return;
         }
-        self.settings = load_settings(project_dir, &self.served);
-        // Rebuilding would just pick the env var's model back up.
-        if let Some(field) = EDITABLE.iter().find(|f| f.kind == FieldKind::Model) {
-            if field.env_override().is_some() {
-                self.status = Some(format!(
-                    "saved {name} — but ${} overrides it in this shell",
-                    field.env
-                ));
-                return;
-            }
-        }
-        self.pending_outcome = Some(Outcome::SwitchModel);
+        self.pending_outcome = Some(Outcome::SwitchModel(name.to_string()));
     }
 
     /// The model `query` names: an exact id, or a fragment matching exactly
